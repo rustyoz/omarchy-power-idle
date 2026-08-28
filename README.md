@@ -4,6 +4,8 @@ Omarchy Quattro bar plugin for idle and power-profile settings, with separate po
 
 Plugin id: `io.github.rustyoz.power-idle`
 
+Author: Russell Oliver (`roliver8143@gmail.com`) · GitHub: [rustyoz](https://github.com/rustyoz)
+
 It sits beside the built-in Power panel (`omarchy.power`). It does not replace it.
 
 ## Install

@@ -3,7 +3,7 @@
   "id": "io.github.rustyoz.power-idle",
   "name": "Power settings",
   "version": "1.0.0",
-  "author": "rustyoz",
+  "author": "Russell Oliver",
   "license": "MIT",
   "description": "Idle and power-profile settings with separate timeouts for plugged in vs on battery: screensaver, turn off screen, lock, and suspend.",
   "kinds": [
