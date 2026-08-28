@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.rustyoz.power-idle",
+  "name": "Power settings",
+  "version": "1.0.0",
+  "author": "rustyoz",
+  "license": "MIT",
+  "description": "Idle and power-profile settings with separate timeouts for plugged in vs on battery: screensaver, turn off screen, lock, and suspend.",
+  "kinds": [
+    "bar-widget",
+    "service"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "barWidget": "BarWidget.qml",
+    "service": "Service.qml"
+  },
+  "barWidget": {
+    "displayName": "Power settings",
+    "description": "Idle timeouts and profiles for plugged in vs on battery",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
