@@ -16,12 +16,38 @@ var TIMEOUTS = [
     { label: "1 hour", seconds: 3600 }
 ]
 
+function profileIdleDefaults(source, profile) {
+    var name = normalizeProfile(profile) || "balanced"
+    var onBattery = source === "battery"
+    if (name === "power-saver") {
+        return onBattery
+            ? { screensaver: 300, screenOff: 600, lock: 300, suspend: 900 }
+            : { screensaver: 600, screenOff: 1200, lock: 600, suspend: null }
+    }
+    if (name === "performance") {
+        return onBattery
+            ? { screensaver: 1800, screenOff: null, lock: null, suspend: null }
+            : { screensaver: 3600, screenOff: null, lock: null, suspend: null }
+    }
+    return onBattery
+        ? { screensaver: 900, screenOff: 1200, lock: 900, suspend: 1800 }
+        : { screensaver: 1800, screenOff: null, lock: null, suspend: null }
+}
+
 function defaults() {
     return {
         profiles: { ac: "performance", battery: "balanced" },
         idle: {
-            ac: { screensaver: 3600, screenOff: null, lock: null, suspend: null },
-            battery: { screensaver: 900, screenOff: 1200, lock: 900, suspend: 1800 }
+            ac: {
+                "power-saver": profileIdleDefaults("ac", "power-saver"),
+                balanced: profileIdleDefaults("ac", "balanced"),
+                performance: profileIdleDefaults("ac", "performance")
+            },
+            battery: {
+                "power-saver": profileIdleDefaults("battery", "power-saver"),
+                balanced: profileIdleDefaults("battery", "balanced"),
+                performance: profileIdleDefaults("battery", "performance")
+            }
         }
     }
 }
@@ -88,6 +114,12 @@ function normalizeProfile(name) {
     return ""
 }
 
+function isFlatIdle(src) {
+    if (!src || typeof src !== "object") return false
+    return src.screensaver !== undefined || src.screenOff !== undefined
+        || src.lock !== undefined || src.suspend !== undefined
+}
+
 function mergeSource(raw, fallback) {
     var src = (raw && typeof raw === "object") ? raw : {}
     return {
@@ -96,6 +128,20 @@ function mergeSource(raw, fallback) {
         lock: normalizeTimeout(src.lock !== undefined ? src.lock : fallback.lock),
         suspend: normalizeTimeout(src.suspend !== undefined ? src.suspend : fallback.suspend)
     }
+}
+
+function mergeSourceProfiles(raw, source, selectedProfile) {
+    var src = (raw && typeof raw === "object") ? raw : {}
+    var selected = normalizeProfile(selectedProfile) || "balanced"
+    var flat = isFlatIdle(src)
+    var out = {}
+    for (var i = 0; i < PROFILE_FALLBACK.length; i++) {
+        var name = PROFILE_FALLBACK[i]
+        var fallback = profileIdleDefaults(source, name)
+        if (flat && name === selected) out[name] = mergeSource(src, fallback)
+        else out[name] = mergeSource(flat ? {} : src[name], fallback)
+    }
+    return out
 }
 
 function merge(raw) {
@@ -108,8 +154,8 @@ function merge(raw) {
     return {
         profiles: { ac: acProfile, battery: batteryProfile },
         idle: {
-            ac: mergeSource(idle.ac, base.idle.ac),
-            battery: mergeSource(idle.battery, base.idle.battery)
+            ac: mergeSourceProfiles(idle.ac, "ac", acProfile),
+            battery: mergeSourceProfiles(idle.battery, "battery", batteryProfile)
         }
     }
 }
@@ -128,6 +174,14 @@ function policyJson(policy) {
     return JSON.stringify(merge(policy), null, 2) + "\n"
 }
 
+function idleJson(policy) {
+    return JSON.stringify(merge(policy).idle)
+}
+
+function idleDirty(policy, savedJson) {
+    return idleJson(policy) !== idleJson(parsePolicyText(savedJson))
+}
+
 function hexEncode(text) {
     var out = ""
     var str = String(text || "")
@@ -143,10 +197,7 @@ function writePolicyCommand(policy) {
     return [
         "python3",
         "-c",
-        "import pathlib,sys\n"
-        + "p=pathlib.Path.home()/'.config/omarchy'\n"
-        + "p.mkdir(parents=True, exist_ok=True)\n"
-        + "(p/'power-idle.json').write_text(bytes.fromhex(sys.argv[1]).decode(), encoding='utf-8')\n",
+        "import pathlib,sys;p=pathlib.Path.home()/'.config/omarchy';p.mkdir(parents=True,exist_ok=True);(p/'power-idle.json').write_text(bytes.fromhex(sys.argv[1]).decode(),encoding='utf-8')",
         hexEncode(policyJson(policy))
     ]
 }
@@ -194,11 +245,24 @@ function reloadConfigCommand() {
 function setProfileCommand(source, profile) {
     var src = source === "battery" ? "battery" : "ac"
     var name = normalizeProfile(profile) || "balanced"
+    return ["omarchy-powerprofiles-set", src, name]
+}
+
+function rememberProfileCommand(source, profile) {
+    var src = source === "battery" ? "battery" : "ac"
+    var name = normalizeProfile(profile) || "balanced"
     return [
-        "bash",
-        "-lc",
-        "omarchy-powerprofiles-set " + src + " " + name
-        + " 2>/dev/null || omarchy powerprofiles set " + src + " " + name
+        "python3",
+        "-c",
+        "import os, pathlib, sys\n"
+        + "src=sys.argv[1]; name=sys.argv[2]\n"
+        + "base=os.environ.get('XDG_STATE_HOME')\n"
+        + "d=pathlib.Path(base) if base else pathlib.Path.home()/'.local'/'state'\n"
+        + "d=d/'omarchy'/'powerprofiles'\n"
+        + "d.mkdir(parents=True, exist_ok=True)\n"
+        + "(d/src).write_text(name+'\\n', encoding='utf-8')\n",
+        src,
+        name
     ]
 }
 
@@ -206,17 +270,23 @@ function parseProfiles(raw) {
     var text = String(raw || "")
     var found = []
     var seen = {}
+    var active = ""
     var lines = text.split(/\r?\n/)
     for (var i = 0; i < lines.length; i++) {
-        var line = lines[i].replace(/^\s*\*\s*/, "").trim().toLowerCase()
-        line = line.replace(/[:*,].*$/, "").trim()
-        var name = normalizeProfile(line)
+        var rawLine = String(lines[i] || "")
+        var starred = /^\s*\*/.test(rawLine)
+        var line = rawLine.replace(/^\s*\*\s*/, "").trim()
+        if (!line) continue
+        var parts = line.split(/\t+/)
+        var head = String(parts[0] || "").replace(/[:*,].*$/, "").trim()
+        var name = normalizeProfile(head)
         if (!name || seen[name]) continue
         seen[name] = true
         found.push(name)
+        if (starred || String(parts[1] || "").trim() === "1") active = name
     }
     if (found.length === 0) found = PROFILE_FALLBACK.slice()
-    return found
+    return { profiles: found, activeProfile: active }
 }
 
 function profileLabel(name) {
@@ -227,9 +297,21 @@ function profileLabel(name) {
     return name
 }
 
-function sourceIdle(policy, source) {
+function idleFor(policy, source, profile) {
     var merged = merge(policy)
-    return source === "battery" ? merged.idle.battery : merged.idle.ac
+    var key = source === "battery" ? "battery" : "ac"
+    var name = normalizeProfile(profile) || merged.profiles[key]
+    return merged.idle[key][name]
+}
+
+function idleField(policy, source, profile, field) {
+    var idle = idleFor(policy, source, profile)
+    if (!idle) return null
+    return idle[field]
+}
+
+function sourceIdle(policy, source) {
+    return idleFor(policy, source, sourceProfile(policy, source))
 }
 
 function sourceProfile(policy, source) {
@@ -240,7 +322,8 @@ function sourceProfile(policy, source) {
 function withTimeout(policy, source, field, seconds) {
     var next = merge(policy)
     var key = source === "battery" ? "battery" : "ac"
-    next.idle[key][field] = normalizeTimeout(seconds)
+    var profile = next.profiles[key]
+    next.idle[key][profile][field] = normalizeTimeout(seconds)
     return next
 }
 

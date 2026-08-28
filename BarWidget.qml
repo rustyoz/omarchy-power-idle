@@ -63,6 +63,9 @@ BarWidget {
         function show(): void { root.open() }
         function hide(): void { root.close() }
         function toggle(): void { root.toggle() }
+        function setProfile(source: string, name: string): void {
+            if (panelLoader.item) panelLoader.item.setSourceProfile(source, name)
+        }
     }
 
     BarIconButton {

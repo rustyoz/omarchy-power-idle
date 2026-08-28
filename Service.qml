@@ -17,6 +17,8 @@ Item {
     property bool stayAwake: false
     property bool screenOffByUs: false
     property bool patchPending: false
+    property bool profileApplyPending: false
+    property string lastProfileSource: ""
 
     readonly property bool batteryPresent: !!(UPower.displayDevice && UPower.displayDevice.isPresent)
     readonly property bool onBattery: !!(batteryPresent && UPower.onBattery)
@@ -67,7 +69,26 @@ Item {
         suspendProc.running = true
     }
 
-    onActiveSourceChanged: root.scheduleShellIdlePatch()
+    function applyActiveProfile() {
+        if (profileApplyProc.running) {
+            root.profileApplyPending = true
+            return
+        }
+        var name = Policy.sourceProfile(root.policy, root.activeSource)
+        profileApplyProc.command = Policy.setProfileCommand(root.activeSource, name)
+        profileApplyProc.running = true
+    }
+
+    onActiveSourceChanged: {
+        if (root.lastProfileSource === "") {
+            root.lastProfileSource = root.activeSource
+            return
+        }
+        if (root.lastProfileSource === root.activeSource) return
+        root.lastProfileSource = root.activeSource
+        root.applyActiveProfile()
+        root.scheduleShellIdlePatch()
+    }
     onStayAwakeChanged: if (stayAwake) root.dpmsOn()
 
     FileView {
@@ -102,6 +123,16 @@ Item {
             if (root.patchPending) {
                 root.patchPending = false
                 root.patchShellIdle()
+            }
+        }
+    }
+
+    Process {
+        id: profileApplyProc
+        onExited: {
+            if (root.profileApplyPending) {
+                root.profileApplyPending = false
+                root.applyActiveProfile()
             }
         }
     }
